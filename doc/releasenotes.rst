@@ -10,6 +10,11 @@ Git master branch
 
 :git:`master <>`.
 
+* Fixed plane-wave meta-GGA stress calculations on GPUs.  XC gradients and
+  LibXC evaluation use CPU arrays, kinetic-energy-density tensors follow the
+  wavefunction backend, and the XC stress contribution is returned on that
+  backend.
+
 
 Version 26.7.0
 ==============

@@ -46,6 +46,28 @@ tested by the GPAW's test suite as well.
    >>> a_gpu = cp.asarray(a_cpu)  # from CPU to GPU
    >>> b_cpu = a_gpu.get()  # from GPU to CPU
 
+Meta-GGA stress
+---------------
+
+The plane-wave meta-GGA implementation evaluates XC gradients and the LibXC
+kernel on CPU.  For stress, interpolation and the kinetic-energy-density
+tensor use the wavefunction backend; the interpolated arrays are transferred
+to CPU before the XC operations.  The resulting 3x3 XC stress contribution is
+then transferred to the backend used by the plane-wave stress accumulator.
+
+This keeps the wavefunctions and density on GPU during a GPU calculation.
+It does not require restarting the SCF calculation on CPU.  For r2SCAN, use
+the explicit functional name ``MGGA_X_R2SCAN+MGGA_C_R2SCAN`` with a LibXC
+version providing both components.
+
+Real-GPU regression tests compare CPU/GPU TPSS and r2SCAN energy, forces,
+and stress with and without spin polarization.  Separate tests check all six
+r2SCAN stress components against finite differences of the force-consistent
+energy for distorted silicon and aluminum cells::
+
+    python -m pytest gpaw/test/gpu/test_mgga_stress.py
+
+
 Building the GPU code
 ---------------------
 
