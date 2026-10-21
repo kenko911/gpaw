@@ -313,6 +313,12 @@ class MGGAFunctional(GGAFunctional):
     def get_setup_name(self):
         return 'PBE'
 
+    def stress_contribution(self, ibzwfs, density, interpolate) -> Array2D:
+        stress = super().stress_contribution(ibzwfs, density, interpolate)
+        # XC is evaluated on CPU, while the PW stress accumulator follows the
+        # wavefunction backend. Transfer only the resulting 3x3 contribution.
+        return ibzwfs.xp.asarray(stress)
+
     def calculate(self,
                   nt_sr: UGArray,
                   taut_sr: UGArray | None = None) -> tuple[float,
@@ -351,7 +357,12 @@ class MGGAFunctional(GGAFunctional):
               ibzwfs,
               density,
               interpolate: Callable[[UGArray], UGArray]):
-        args, kwargs = super()._args(ibzwfs, density, interpolate)
+        def cpu_interpolate(array):
+            # The MGGA gradients and LibXC kernel require NumPy arrays, just
+            # as in calculate(). Keep interpolation on its original backend.
+            return interpolate(array).to_xp(np)
+
+        args, kwargs = super()._args(ibzwfs, density, cpu_interpolate)
         taut_swR = _taut(ibzwfs, density.nt_sR.desc)
 
         if not args:
@@ -360,11 +371,11 @@ class MGGAFunctional(GGAFunctional):
         e_r, nt_sr, vt_sr, sigma_xr, dedsigma_xr = args
         taut_sR = density.taut_sR
         assert taut_sR is not None
-        taut_sr = interpolate(taut_sR)
+        taut_sr = cpu_interpolate(taut_sR)
         dedtaut_sr = taut_sr.new()
         args += (taut_sr, dedtaut_sr)
         kwargs['taut_swR'] = taut_swR
-        kwargs['interpolate'] = interpolate
+        kwargs['interpolate'] = cpu_interpolate
 
         return args, kwargs
 
@@ -411,9 +422,11 @@ def _taut(ibzwfs: IBZWaveFunctions, grid: UGDesc) -> UGArray | None:
     Only cores with ``kpt_comm.rank==0`` and ``band_comm.rank==0``
     return the uniform grids - other cores return None.
     """
-    # "1" refers to undistributed arrays
-    dpsit1_vR = grid.new(comm=None, dtype=ibzwfs.dtype).empty(3)
-    taut1_swR = grid.new(comm=None).zeros((ibzwfs.nspins, 6))
+    xp = ibzwfs.xp
+    # "1" refers to undistributed arrays. Wavefunction gathers, FFTs, and
+    # kinetic-energy-density products must all use the same backend.
+    dpsit1_vR = grid.new(comm=None, dtype=ibzwfs.dtype).empty(3, xp=xp)
+    taut1_swR = grid.new(comm=None).zeros((ibzwfs.nspins, 6), xp=xp)
     assert isinstance(taut1_swR, UGArray)  # Argggghhh!
     domain_comm = grid.comm
 
@@ -423,9 +436,9 @@ def _taut(ibzwfs: IBZWaveFunctions, grid: UGDesc) -> UGArray | None:
         pw = psit_nG.desc
 
         pw1 = pw.new(comm=None)
-        psit1_G = pw1.empty()
-        iGpsit1_G = pw1.empty()
-        Gplusk1_Gv = pw1.reciprocal_vectors()
+        psit1_G = pw1.empty(xp=xp)
+        iGpsit1_G = pw1.empty(xp=xp)
+        Gplusk1_Gv = xp.asarray(pw1.reciprocal_vectors())
 
         occ_n = wfs.weight * wfs.spin_degeneracy * wfs.myocc_n
 
@@ -460,7 +473,7 @@ def _taut(ibzwfs: IBZWaveFunctions, grid: UGDesc) -> UGArray | None:
                 symmetries = ibzwfs.ibz.symmetries
                 taut1_swR.symmetrize(symmetries.rotation_scc,
                                      symmetries.translation_sc)
-            taut_swR = grid.empty((ibzwfs.nspins, 6))
+            taut_swR = grid.empty((ibzwfs.nspins, 6), xp=xp)
             taut_swR.scatter_from(taut1_swR)
             return taut_swR
     return None

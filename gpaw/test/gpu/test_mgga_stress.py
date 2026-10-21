@@ -73,6 +73,13 @@ def test_mgga_stress_cpu_gpu(xc, spinpol, monkeypatch, in_tmp_dir):
 @pytest.mark.skipif(cupy_is_fake, reason='Requires real GPU arrays')
 def test_r2scan_gpu_stress_finite_difference(symbol, in_tmp_dir):
     atoms = distorted_cell(symbol)
+    if symbol == 'Al':
+        # At right angles the gradient stencil can switch under a shear,
+        # making the discrete energy discontinuous even on CPU.
+        atoms.set_cell(atoms.cell @ [[1.02, 0.017, 0.013],
+                                    [0.011, 0.99, -0.019],
+                                    [0.021, -0.014, 1.03]], scale_atoms=True)
+    eps = 1e-5 if symbol == 'Al' else 1e-4
     atoms.calc = GPAW(mode={'name': 'pw', 'ecut': 300},
                       xc='MGGA_X_R2SCAN+MGGA_C_R2SCAN',
                       kpts=(2, 2, 2),
@@ -84,7 +91,7 @@ def test_r2scan_gpu_stress_finite_difference(symbol, in_tmp_dir):
                       setups='paw',
                       txt=f'{symbol}.txt')
     analytic = atoms.get_stress()
-    numerical = calculate_numerical_stress(atoms, eps=1e-4,
+    numerical = calculate_numerical_stress(atoms, eps=eps,
                                          force_consistent=True)
     print(f'{symbol} analytic stress:', analytic)
     print(f'{symbol} numerical stress:', numerical)
